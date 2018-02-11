@@ -80,6 +80,9 @@ extern crate bitflags;
 
 extern crate serde;
 
+#[macro_use]
+extern crate nom;
+
 pub mod htslib;
 pub mod bam;
 pub mod bcf;
