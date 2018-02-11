@@ -78,10 +78,17 @@ extern crate ieee754;
 extern crate lazy_static;
 extern crate bitflags;
 
+#[cfg(feature = "serde")]
 extern crate serde;
 
 #[macro_use]
 extern crate nom;
+
+#[cfg(all(test, feature = "serde"))]
+extern crate bincode;
+
+#[cfg(all(test, feature = "serde"))]
+extern crate serde_json;
 
 pub mod htslib;
 pub mod bam;
