@@ -1,7 +1,13 @@
 use nom::{le_u8, le_u32, le_i32, le_u64};
+use std::path::Path;
+use std::fs::File;
+use std::io::Read;
 
 use std::collections::HashSet;
 
+use bam::IndexedReaderError;
+
+#[derive(Copy, Clone, PartialEq, Eq, Ord, PartialOrd)]
 pub struct Chunk {
     chunk_beg: u64,
     chunk_end: u64
@@ -17,11 +23,10 @@ struct RefIndex {
     ioffsets: Vec<u64>,
 }
 
-struct Index {
+struct BaiIndex {
     ref_indexes: Vec<RefIndex>,
     n_no_coor: u64,
 }
-
 
 named!(parse_ref_index<&[u8], RefIndex>,
     do_parse!(
@@ -67,20 +72,35 @@ named!(parse_bin<&[u8], Bin>,
 
 const BAI_MAGIC: &[u8; 4] = &[b'B', b'A', b'I', 1u8];
 
-named!(parse_bai<&[u8], Index>,
+named!(parse_bai<&[u8], BaiIndex>,
     do_parse!(
         tag!(BAI_MAGIC) >> 
         n_ref: le_i32 >>
         ref_indexes: count!(parse_ref_index, n_ref as usize) >>
         n_no_coor: le_u64 >>
         (
-            Index {
+            BaiIndex {
                 ref_indexes: ref_indexes,
                 n_no_coor: n_no_coor,
             }
         )
     )
 );
+
+impl BaiIndex {
+    pub fn load<P: AsRef<Path>>(path: P) -> Result<BaiIndex, IndexedReaderError> {
+        let mut f = File::open(path)?;
+
+        let mut buf = Vec::new();
+        f.read_to_end(&mut buf)?;
+
+        match parse_bai(&buf).to_result() {
+            Ok(v) => Ok(v),
+            Err(v) => Err(IndexedReaderError::InvalidIndex),
+        }
+    }
+}
+
 
 
 /* calculate bin given an alignment covering [beg,end) (zero-based, half-closed-half-open) */
@@ -143,6 +163,20 @@ struct CsiIndex {
     n_no_coor: u64,
 }
 
+impl CsiIndex {
+    pub fn load<P: AsRef<Path>>(path: P) -> Result<CsiIndex, IndexedReaderError> {
+        let mut f = File::open(path)?;
+
+        let mut buf = Vec::new();
+        f.read_to_end(&mut buf)?;
+
+        match parse_csi(&buf).to_result() {
+            Ok(v) => Ok(v),
+            Err(v) => Err(IndexedReaderError::InvalidIndex),
+        }
+    }
+}
+
 const CSI_MAGIC: &[u8; 4] = &[b'C', b'S', b'I', 1u8];
 
 named!(parse_csi<&[u8], CsiIndex>,
@@ -196,27 +230,101 @@ named!(parse_csi_bin<&[u8], CsiBin>,
     )
 );
 
+
+/* calculate bin given an alignment covering [beg,end) (zero-based, half-close-half-open) */
+fn csi_reg2bin(u64 beg, u64 end, i32 min_shift, i32 depth)
+{
+    let l = depth;
+    let s = min_shift,
+    let t = ((1<<depth*3) - 1) / 7;
+
+    end -= 1;
+
+    while l > 0 {
+        if (beg >> s == end >> s) {
+            return t + (beg >> s);
+        }
+
+        l -= 1;
+        s += 3;
+        t -= 1<<l*3;
+    }
+
+    return 0;
+}
+
+
+/* calculate the list of bins that may overlap with region [beg,end) (zero-based) */
+fn csi_reg2bins(u64 beg, u64 end, i32 min_shift, i32 depth, bins: &mut Vec<u32>) {
+    bins.clear();
+    let l = 0;
+    let n = 0;
+    let t = 0;
+    let s = min_shift + depth * 3;
+
+    end -= 1;
+    while l <= depth {
+        let b = t + (beg >> s);
+        let e = t + (end >> s);
+        bins.extend(b..(e+1))
+
+        s -= 3;
+        t += 1 << l*3;
+        l += 1;
+    }
+}
+
 pub trait BgzfIndex {
-    fn chunks(&self, ref_id: usize, beg: u32, end: u32, chunks: &mut Vec<Chunk>);
+    fn query(&self, ref_id: usize, beg: u32, end: u32, chunks: &mut Vec<Chunk>);
 }
 
 use std::iter::FromIterator;
 
-impl BgzfIndex for Index {
-    fn chunks(&self, ref_id: usize, beg: u32, end: u32, chunks: &mut Vec<Chunk>) {
+impl BgzfIndex for BaiIndex {
+
+    /// Fill `chunks` with set of chunks that may contain reads inside the query interval
+    fn query(&self, ref_id: usize, beg: u32, end: u32, chunks: &mut Vec<Chunk>) {
+
+        chunks.clear();
         let mut bins = Vec::new();
         reg2bins(beg, end, &mut bins);
         let bins: HashSet<u16> = HashSet::from_iter(bins.into_iter());
 
         let ref_idx = &self.ref_indexes[ref_id];
 
+        // Linear index is over 16384 (2^14) bp bins
+        let linear_index_bin = beg >> (2^14);
+        let linear_index_start = ref_idx.ioffsets[linear_index_bin as usize];
+
         for b in ref_idx.bins.iter() {
             if bins.contains(&(b.bin as u16)) {
-
-                
+                chunks.extend(b.chunks.cloned().filter(|c| c.chunk_end > linear_index_start));
             }
         }
 
+        chunks.sort();
+    }
+}
 
+impl BgzfIndex for CsiIndex {
+
+    /// Fill `chunks` with set of chunks that may contain reads inside the query interval
+    fn query(&self, ref_id: usize, beg: u32, end: u32, chunks: &mut Vec<Chunk>) {
+
+        chunks.clear();
+        let mut bins = Vec::new();
+        csi_reg2bins(beg, end, self.min_shift, self.depth, &mut bins);
+        let bins: HashSet<u16> = HashSet::from_iter(bins.into_iter());
+
+        let ref_idx = &self.ref_indexes[ref_id];
+
+        for b in ref_idx.bins.iter() {
+            if bins.contains(&(b.bin as u16)) {
+                // FIXME consider linear indexing
+                chunks.extend(b.chunks);
+            }
+        }
+
+        chunks.sort();
     }
 }

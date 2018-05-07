@@ -8,6 +8,7 @@ pub mod record;
 pub mod header;
 pub mod pileup;
 pub mod buffer;
+pub mod index;
 
 #[cfg(feature = "serde")]
 pub mod record_serde;
@@ -15,6 +16,7 @@ pub mod record_serde;
 use std::ffi;
 use std::ptr;
 use std::slice;
+use std::io;
 use std::path::Path;
 use url::Url;
 use libc;
@@ -484,6 +486,9 @@ quick_error! {
         BGZFError(err: BGZFError) {
             from()
         }
+        IoError(err: io::Error) {
+            from()
+        }
     }
 }
 
@@ -625,17 +630,23 @@ impl HeaderView {
 
     /// Create a new HeaderView from a pre-populated Header object
     pub fn from_header(header: &Header) -> Self {
+        
+        let mut header_string = header.to_bytes();
+        if !header_string.is_empty() && header_string[header_string.len() - 1] != b'\n' {
+            header_string.push(b'\n');
+        }
+        Self::from_bytes(&header_string)
+    }
+
+    /// Create a new HeaderView from bytes
+    pub fn from_bytes(header: &[u8]) -> Self {
 
         let header_record = unsafe {
-            let mut header_string = header.to_bytes();
-            if !header_string.is_empty() && header_string[header_string.len() - 1] != b'\n' {
-                header_string.push(b'\n');
-            }
-            let l_text = header_string.len();
+            let l_text = header.len();
             let text = ::libc::malloc(l_text + 1);
             ::libc::memset(text, 0, l_text + 1);
-            ::libc::memcpy(text, header_string.as_ptr() as *const ::libc::c_void, header_string.len());
-            //println!("{}", std::str::from_utf8(&header_string).unwrap());
+            ::libc::memcpy(text, header.as_ptr() as *const ::libc::c_void, header.len());
+
             let rec = htslib::sam_hdr_parse(
                 (l_text + 1) as i32,
                 text as *const i8,
