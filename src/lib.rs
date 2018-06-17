@@ -77,6 +77,10 @@ extern crate ieee754;
 #[macro_use]
 extern crate lazy_static;
 extern crate bitflags;
+extern crate byteorder;
+
+#[macro_use]
+extern crate failure;
 
 #[cfg(feature = "serde")]
 extern crate serde;
