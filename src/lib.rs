@@ -91,6 +91,13 @@ extern crate serde;
 #[cfg(all(test, feature = "serde"))]
 extern crate bincode;
 
+#[macro_use]
+extern crate failure;
+
+#[macro_use]
+extern crate nom;
+extern crate byteorder;
+
 #[cfg(test)] // <-- not needed in examples + integration tests
 #[macro_use]
 extern crate pretty_assertions;
