@@ -82,6 +82,7 @@ extern crate newtype_derive;
 extern crate quick_error;
 extern crate regex;
 extern crate url;
+extern crate flate2;
 
 extern crate linear_map;
 
@@ -111,3 +112,4 @@ pub mod prelude;
 pub mod sam;
 pub mod tbx;
 pub mod utils;
+pub mod bgzf;

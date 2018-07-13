@@ -27,6 +27,8 @@ linear-map = "1.2.0"
 byteorder = "1.2"
 nom = "4"
 failure = "*"
+flate2 = "*"
+
 
 [features]
 default = []
